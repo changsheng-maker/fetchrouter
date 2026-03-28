@@ -8,12 +8,30 @@ import re
 import json
 import time
 import asyncio
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Pattern
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
 from agents.fetch_agents import FetchResult
+from core.logger import info, debug, warning, error
+
+# 预编译 SITE_PATTERNS（性能优化）
+# 注意：这些在模块导入时编译，避免每次匹配时重复编译
+_SITE_PATTERNS_COMPILED: Dict[SiteType, List[Pattern]] = {
+    SiteType.X_TWITTER: [re.compile(r"(x\.com|twitter\.com|t\.co)", re.IGNORECASE)],
+    SiteType.WECHAT: [re.compile(r"mp\.weixin\.qq\.com", re.IGNORECASE)],
+    SiteType.XIAOHONGSHU: [re.compile(r"xiaohongshu\.com", re.IGNORECASE)],
+    SiteType.ZHIHU: [re.compile(r"zhihu\.com", re.IGNORECASE)],
+    SiteType.DOUYIN: [re.compile(r"douyin\.com", re.IGNORECASE)],
+    SiteType.BILIBILI: [re.compile(r"bilibili\.com/video", re.IGNORECASE)],
+    SiteType.GITHUB: [re.compile(r"github\.com", re.IGNORECASE)],
+    SiteType.MEDIUM: [re.compile(r"medium\.com", re.IGNORECASE)],
+    SiteType.NEWS: [re.compile(r"(techcrunch|theverge|wired|nytimes|bbc)\.com", re.IGNORECASE)],
+    SiteType.ECOMMERCE: [re.compile(r"(amazon|taobao|jd|tmall)\.(com|cn)", re.IGNORECASE)],
+    SiteType.PDF: [re.compile(r"\.pdf$", re.IGNORECASE)],
+    SiteType.IMAGE: [re.compile(r"\.(jpg|jpeg|png|gif|webp|svg)$", re.IGNORECASE)],
+}
 
 
 class Strategy(Enum):
@@ -139,10 +157,10 @@ class Orchestrator:
         return url.split("/")[0]
 
     def _identify_site_type(self, url: str) -> SiteType:
-        """识别网站类型"""
-        for site_type, patterns in self.SITE_PATTERNS.items():
+        """识别网站类型 - 使用预编译正则（性能优化）"""
+        for site_type, patterns in _SITE_PATTERNS_COMPILED.items():
             for pattern in patterns:
-                if re.search(pattern, url, re.IGNORECASE):
+                if pattern.search(url):
                     return site_type
         return SiteType.UNKNOWN
 
@@ -155,11 +173,10 @@ class Orchestrator:
 
         # 1. 分析 URL
         analysis = self.analyze(url)
-        print(f"🔍 URL分析: {analysis.site_type.value}")
-        print(f"   策略: {analysis.recommended_strategy.value}")
-        print(f"   Agent链: {' → '.join(analysis.agent_chain)}")
-        print(f"   说明: {analysis.note}")
-        print()
+        info(f"URL分析: {analysis.site_type.value}")
+        info(f"  策略: {analysis.recommended_strategy.value}")
+        info(f"  Agent链: {' → '.join(analysis.agent_chain)}")
+        info(f"  说明: {analysis.note}")
 
         # 2. 根据策略执行
         if force_strategy:
@@ -228,10 +245,10 @@ class Orchestrator:
             try:
                 result = task.result()
                 if result and result.success:
-                    print(f"\n✅ {result.agent} 率先成功")
+                    info(f"{result.agent} 率先成功")
                     return result
             except Exception as e:
-                print(f"   Agent 异常: {e}")
+                warning(f"Agent 异常: {e}")
 
         # 全部失败，返回第一个结果（包含错误信息）
         for task in done:
@@ -262,8 +279,8 @@ class Orchestrator:
         """
         登录优先策略：只使用 Browser Agent (CDP)
         """
-        print("🔐 执行策略: 登录优先")
-        print("   注意: 需要 Chrome 已登录相应网站")
+        info("执行策略: 登录优先")
+        info("  注意: 需要 Chrome 已登录相应网站")
 
         return await self._call_browser_agent(analysis.url, use_cdp=True)
 
@@ -271,10 +288,10 @@ class Orchestrator:
         """
         社媒优先策略：专用工具 → Browser → Jina
         """
-        print("📱 执行策略: 社媒优先 (串行)")
+        info("执行策略: 社媒优先 (串行)")
 
         for agent_name in analysis.agent_chain:
-            print(f"\n   尝试 {agent_name}...")
+            info(f"  尝试 {agent_name}...")
 
             if agent_name == "social-agent":
                 result = await self._call_social_agent(analysis.url)
@@ -288,7 +305,7 @@ class Orchestrator:
             if result.success:
                 return result
 
-            print(f"   {agent_name} 失败，降级到下一个")
+            warning(f"{agent_name} 失败，降级到下一个")
 
         return FetchResult(
             success=False,
@@ -304,7 +321,7 @@ class Orchestrator:
         """
         反爬对抗策略：Scrapling → Browser
         """
-        print("🛡️ 执行策略: 反爬对抗")
+        info("执行策略: 反爬对抗")
 
         for agent_name in analysis.agent_chain:
             if agent_name == "scrapling-agent":

@@ -32,8 +32,8 @@ class CacheManager:
         self.memory_cache: Dict[str, CacheEntry] = {}
 
     def _get_cache_key(self, url: str) -> str:
-        """生成缓存键"""
-        return hashlib.md5(url.encode()).hexdigest()
+        """生成缓存键 - 使用 SHA-256 替代 MD5"""
+        return hashlib.sha256(url.encode()).hexdigest()[:32]
 
     def _get_cache_file(self, key: str) -> Path:
         """获取缓存文件路径"""

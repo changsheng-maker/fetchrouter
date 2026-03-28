@@ -504,19 +504,22 @@ class SocialAgent(BaseAgent):
                 duration_ms=(time.time() - start_time) * 1000
             )
 
-        # 尝试使用 xreach
+        # 尝试使用 xreach（异步非阻塞）
         try:
-            result = subprocess.run(
-                ["xreach", "thread", url],
-                capture_output=True,
-                text=True,
+            proc = await asyncio.create_subprocess_exec(
+                "xreach", "thread", url,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(),
                 timeout=30
             )
 
             duration = (time.time() - start_time) * 1000
 
-            if result.returncode == 0:
-                content = result.stdout
+            if proc.returncode == 0:
+                content = stdout.decode('utf-8', errors='ignore')
                 return FetchResult(
                     success=True,
                     url=url,
@@ -531,6 +534,7 @@ class SocialAgent(BaseAgent):
                     duration_ms=duration
                 )
             else:
+                stderr_text = stderr.decode('utf-8', errors='ignore') if stderr else ""
                 return FetchResult(
                     success=False,
                     url=url,
@@ -538,7 +542,7 @@ class SocialAgent(BaseAgent):
                     tool="xreach",
                     content={},
                     metadata={},
-                    error=f"xreach 失败: {result.stderr}",
+                    error=f"xreach 失败: {stderr_text}",
                     duration_ms=(time.time() - start_time) * 1000
                 )
 

@@ -14,6 +14,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from agents.orchestrator import Orchestrator, analyze_url, fetch_url
+from core.logger import setup_logging, info, error, warning
+
+# 初始化日志
+logger = setup_logging()
 
 
 def main():
@@ -75,7 +79,7 @@ def main():
 
 def cmd_analyze(args):
     """分析 URL"""
-    print(f"🔍 分析 URL: {args.url}\n")
+    info(f"分析 URL: {args.url}\n")
 
     analysis = analyze_url(args.url)
 
@@ -92,7 +96,7 @@ def cmd_analyze(args):
 
 async def cmd_fetch(args):
     """抓取 URL"""
-    print(f"🚀 FetchRouter 抓取: {args.url}\n")
+    info(f"FetchRouter 抓取: {args.url}\n")
 
     result = await fetch_url(args.url, strategy=args.strategy)
 
@@ -134,36 +138,86 @@ async def cmd_fetch(args):
 
 
 async def cmd_batch(args):
-    """批量抓取"""
+    """批量抓取 - 并发优化"""
+    file_path = Path(args.file)
+
+    # 验证文件存在性
+    if not file_path.exists():
+        error(f"文件不存在: {args.file}")
+        return
+
+    if not file_path.is_file():
+        error(f"路径不是文件: {args.file}")
+        return
+
     # 读取 URL 列表
-    with open(args.file, 'r') as f:
-        urls = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+    try:
+        with open(args.file, 'r', encoding='utf-8') as f:
+            urls = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+    except PermissionError:
+        error(f"没有权限读取文件: {args.file}")
+        return
+    except UnicodeDecodeError as e:
+        error(f"文件编码错误 (请使用 UTF-8): {e}")
+        return
+    except Exception as e:
+        error(f"读取文件失败: {e}")
+        return
 
-    print(f"🔄 批量抓取 {len(urls)} 个 URL\n")
+    if not urls:
+        error("没有有效的 URL")
+        return
 
-    results = []
-    for i, url in enumerate(urls, 1):
-        print(f"\n[{i}/{len(urls)}] {url}")
-        result = await fetch_url(url)
-        results.append({
-            "url": url,
-            "success": result.success,
-            "agent": result.agent,
-            "error": result.error
-        })
+    info(f"批量抓取 {len(urls)} 个 URL (并发数: {args.parallel or 3})\n")
 
-        status = "✅" if result.success else "❌"
-        print(f"    {status} {result.agent}")
+    # 使用信号量限制并发数
+    semaphore = asyncio.Semaphore(args.parallel or 3)
+
+    async def fetch_with_limit(url: str, index: int) -> dict:
+        """带并发限制的抓取"""
+        async with semaphore:
+            print(f"\n[{index}/{len(urls)}] {url}")
+            result = await fetch_url(url)
+            status = "✅" if result.success else "❌"
+            print(f"    {status} {result.agent} ({result.duration_ms:.0f}ms)")
+            return {
+                "url": url,
+                "success": result.success,
+                "agent": result.agent,
+                "error": result.error,
+                "duration_ms": result.duration_ms
+            }
+
+    # 并发执行所有任务
+    tasks = [fetch_with_limit(url, i+1) for i, url in enumerate(urls)]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # 处理结果
+    valid_results = []
+    for r in results:
+        if isinstance(r, Exception):
+            error(f"抓取异常: {r}")
+        else:
+            valid_results.append(r)
 
     # 统计
-    success_count = sum(1 for r in results if r["success"])
-    print(f"\n📊 完成: {success_count}/{len(urls)} 成功")
+    success_count = sum(1 for r in valid_results if r["success"])
+    total_duration = sum(r["duration_ms"] for r in valid_results if r["duration_ms"])
+    avg_duration = total_duration / len(valid_results) if valid_results else 0
+
+    print(f"\n完成: {success_count}/{len(urls)} 成功")
+    print(f"平均耗时: {avg_duration:.0f}ms")
 
     # 保存结果
     if args.output:
-        with open(args.output, 'w', encoding='utf-8') as f:
-            json.dump(results, f, ensure_ascii=False, indent=2)
-        print(f"💾 结果已保存: {args.output}")
+        try:
+            with open(args.output, 'w', encoding='utf-8') as f:
+                json.dump(valid_results, f, ensure_ascii=False, indent=2)
+            info(f"结果已保存: {args.output}")
+        except PermissionError as e:
+            error(f"没有权限保存结果: {e}")
+        except Exception as e:
+            error(f"保存结果失败: {e}")
 
 
 async def cmd_test():
@@ -176,7 +230,7 @@ async def cmd_test():
         ("小红书", "https://xiaohongshu.com/explore/abc"),
     ]
 
-    print("🧪 FetchRouter Agent Team 测试\n")
+    info("FetchRouter Agent Team 测试\n")
     print("=" * 80)
 
     for name, url in test_urls:
@@ -188,7 +242,7 @@ async def cmd_test():
         print(f"Agent链: {' → '.join(analysis.agent_chain)}")
         print("-" * 80)
 
-    print("\n✅ 测试完成")
+    info("测试完成")
     print("\n使用示例:")
     print("  python -m fetchrouter fetch https://github.com/anthropics/claude-code")
 
