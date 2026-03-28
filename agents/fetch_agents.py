@@ -72,7 +72,9 @@ class JinaAgent(BaseAgent):
             if not url.startswith(('http://', 'https://')):
                 url = 'https://' + url
 
-            jina_url = f"https://r.jina.ai/http://{url}"
+            # Jina Reader API: 移除协议后拼接
+            url_no_protocol = url.replace('https://', '').replace('http://', '')
+            jina_url = f"https://r.jina.ai/http://{url_no_protocol}"
 
             req = urllib.request.Request(
                 jina_url,
@@ -419,7 +421,7 @@ class SocialAgent(BaseAgent):
         # 尝试使用 xreach
         try:
             result = subprocess.run(
-                ["xreach", "fetch", url],
+                ["xreach", "thread", url],
                 capture_output=True,
                 text=True,
                 timeout=30

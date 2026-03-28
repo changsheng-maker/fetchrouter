@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
+from agents.fetch_agents import FetchResult
+
 
 class Strategy(Enum):
     """抓取策略"""
@@ -54,19 +56,6 @@ class URLAnalysis:
     agent_chain: List[str]
     priority: int
     note: str
-
-
-@dataclass
-class FetchResult:
-    """抓取结果"""
-    success: bool
-    url: str
-    agent: str
-    tool: str
-    content: Dict[str, Any]
-    metadata: Dict[str, Any]
-    error: Optional[str] = None
-    duration_ms: float = 0
 
 
 class Orchestrator:
