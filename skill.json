@@ -1,0 +1,32 @@
+{
+  "id": "fetchrouter",
+  "name": "FetchRouter",
+  "version": "2.0.0",
+  "description": "智能网页抓取 - 自动选择最佳工具，支持批量、缓存、多种格式输出",
+  "author": "Claude",
+  "tags": ["web", "fetch", "scrape", "content"],
+  "commands": [
+    {
+      "name": "fetch",
+      "description": "抓取单个URL内容",
+      "prompt": "prompts/fetch.md"
+    },
+    {
+      "name": "fetch-batch",
+      "description": "批量抓取多个URL",
+      "prompt": "prompts/fetch-batch.md"
+    },
+    {
+      "name": "fetch-config",
+      "description": "配置FetchRouter设置",
+      "prompt": "prompts/config.md"
+    }
+  ],
+  "hooks": {
+    "onURLDetected": "hooks/url_handler.py"
+  },
+  "entry": {
+    "type": "prompt",
+    "file": "prompts/main.md"
+  }
+}
