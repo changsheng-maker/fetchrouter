@@ -103,6 +103,7 @@ class Orchestrator:
             "failed": 0,
             "by_agent": {}
         }
+        self._stats_lock = asyncio.Lock()
 
     def analyze(self, url: str) -> URLAnalysis:
         """
@@ -182,15 +183,16 @@ class Orchestrator:
         duration = (time.time() - start_time) * 1000
         result.duration_ms = duration
 
-        if result.success:
-            self.stats["successful"] += 1
-        else:
-            self.stats["failed"] += 1
+        async with self._stats_lock:
+            if result.success:
+                self.stats["successful"] += 1
+            else:
+                self.stats["failed"] += 1
 
-        agent = result.agent
-        if agent not in self.stats["by_agent"]:
-            self.stats["by_agent"][agent] = {"success": 0, "fail": 0}
-        self.stats["by_agent"][agent]["success" if result.success else "fail"] += 1
+            agent = result.agent
+            if agent not in self.stats["by_agent"]:
+                self.stats["by_agent"][agent] = {"success": 0, "fail": 0}
+            self.stats["by_agent"][agent]["success" if result.success else "fail"] += 1
 
         return result
 

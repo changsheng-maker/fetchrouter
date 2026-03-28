@@ -7,10 +7,11 @@ Fetch Agents - 具体执行抓取的子 Agents
 import re
 import json
 import time
+import asyncio
 import urllib.request
 import urllib.error
 from typing import Dict, Any, Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
@@ -31,6 +32,36 @@ class BaseAgent:
 
     name = "base"
     tool = "base"
+
+    def _is_safe_url(self, url: str) -> bool:
+        """检查 URL 是否安全（防止 SSRF）"""
+        from urllib.parse import urlparse
+        import ipaddress
+
+        try:
+            parsed = urlparse(url)
+            hostname = parsed.hostname
+
+            if not hostname:
+                return False
+
+            # 检查内网地址
+            internal_hosts = {'localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]'}
+            if hostname.lower() in internal_hosts:
+                return False
+
+            # 检查私有 IP
+            try:
+                ip = ipaddress.ip_address(hostname)
+                if ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_multicast:
+                    return False
+            except ValueError:
+                # 不是 IP 地址，是域名，继续检查
+                pass
+
+            return True
+        except Exception:
+            return False
 
     async def fetch(self, url: str) -> FetchResult:
         """子类必须实现"""
@@ -66,6 +97,19 @@ class JinaAgent(BaseAgent):
     async def fetch(self, url: str) -> FetchResult:
         """使用 Jina Reader API 抓取"""
         start_time = time.time()
+
+        # SSRF 防护
+        if not self._is_safe_url(url):
+            return FetchResult(
+                success=False,
+                url=url,
+                agent=self.name,
+                tool=self.tool,
+                content={},
+                metadata={},
+                error="Access to internal addresses is forbidden",
+                duration_ms=0
+            )
 
         try:
             # 确保 URL 有协议
@@ -216,32 +260,33 @@ class BrowserAgent(BaseAgent):
 
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True)
-                page = await browser.new_page()
-                await page.goto(url, timeout=30000, wait_until="networkidle")
+                try:
+                    page = await browser.new_page()
+                    await page.goto(url, timeout=30000, wait_until="networkidle")
 
-                # 获取内容
-                text = await page.inner_text("body")
-                title = await page.title()
+                    # 获取内容
+                    text = await page.inner_text("body")
+                    title = await page.title()
 
-                await browser.close()
+                    cleaned = self._clean_content(text)
 
-                cleaned = self._clean_content(text)
-
-                return FetchResult(
-                    success=True,
-                    url=url,
-                    agent=self.name,
-                    tool=self.tool,
-                    content={
-                        "title": title,
-                        "text": cleaned,
-                        "links": []
-                    },
-                    metadata={
-                        "word_count": len(cleaned.split()),
-                        "char_count": len(cleaned)
-                    }
-                )
+                    return FetchResult(
+                        success=True,
+                        url=url,
+                        agent=self.name,
+                        tool=self.tool,
+                        content={
+                            "title": title,
+                            "text": cleaned,
+                            "links": []
+                        },
+                        metadata={
+                            "word_count": len(cleaned.split()),
+                            "char_count": len(cleaned)
+                        }
+                    )
+                finally:
+                    await browser.close()
 
         except Exception as e:
             return FetchResult(
@@ -252,16 +297,6 @@ class BrowserAgent(BaseAgent):
                 content={},
                 metadata={},
                 error=f"Playwright 错误: {str(e)[:200]}"
-            )
-        except Exception as e:
-            return FetchResult(
-                success=False,
-                url=url,
-                agent=self.name,
-                tool=self.tool,
-                content={},
-                metadata={},
-                error=str(e)
             )
 
     async def _fetch_with_cdp(self, url: str) -> FetchResult:
@@ -417,6 +452,45 @@ class SocialAgent(BaseAgent):
     async def _fetch_twitter(self, url: str, start_time: float) -> FetchResult:
         """抓取推文"""
         import subprocess
+        from urllib.parse import urlparse
+
+        # 验证 URL 安全
+        try:
+            parsed = urlparse(url)
+            if parsed.scheme not in ('http', 'https'):
+                return FetchResult(
+                    success=False,
+                    url=url,
+                    agent=self.name,
+                    tool="xreach",
+                    content={},
+                    metadata={},
+                    error="Invalid URL scheme",
+                    duration_ms=(time.time() - start_time) * 1000
+                )
+            # 只允许 x.com 和 twitter.com
+            if parsed.hostname not in ('x.com', 'twitter.com', 'www.x.com', 'www.twitter.com'):
+                return FetchResult(
+                    success=False,
+                    url=url,
+                    agent=self.name,
+                    tool="xreach",
+                    content={},
+                    metadata={},
+                    error="Invalid Twitter/X URL",
+                    duration_ms=(time.time() - start_time) * 1000
+                )
+        except Exception as e:
+            return FetchResult(
+                success=False,
+                url=url,
+                agent=self.name,
+                tool="xreach",
+                content={},
+                metadata={},
+                error=f"URL validation failed: {str(e)}",
+                duration_ms=(time.time() - start_time) * 1000
+            )
 
         # 尝试使用 xreach
         try:
