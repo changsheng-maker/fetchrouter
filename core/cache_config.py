@@ -68,8 +68,16 @@ class CacheManager:
                 else:
                     # 删除过期缓存
                     cache_file.unlink()
-            except Exception:
-                pass
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+                # 缓存文件损坏或格式错误，删除它
+                try:
+                    cache_file.unlink()
+                except OSError:
+                    pass
+                return None
+            except OSError:
+                # 文件系统错误
+                return None
 
         return None
 
@@ -108,7 +116,8 @@ class CacheManager:
         for cache_file in self.cache_dir.glob("*.json"):
             try:
                 cache_file.unlink()
-            except:
+            except OSError:
+                # 文件可能已被删除或无权限
                 pass
 
     def clean_expired(self):
@@ -132,8 +141,12 @@ class CacheManager:
 
                 if entry.is_expired():
                     cache_file.unlink()
-            except:
-                pass
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError, OSError):
+                # 文件损坏或无法访问，尝试删除
+                try:
+                    cache_file.unlink()
+                except OSError:
+                    pass
 
     def get_stats(self) -> Dict[str, Any]:
         """获取缓存统计"""
@@ -197,23 +210,26 @@ class ConfigManager:
         """获取配置项"""
         return self._config.get(key, default)
 
-    def set(self, key: str, value):
+    def set(self, key: str, value) -> bool:
         """设置配置项"""
-        if key in self.DEFAULT_CONFIG:
-            # 类型转换
-            default_type = type(self.DEFAULT_CONFIG[key])
-            if default_type == bool and isinstance(value, str):
-                value = value.lower() in ('true', 'yes', '1', 'on')
-            else:
-                try:
-                    value = default_type(value)
-                except:
-                    pass
+        if key not in self.DEFAULT_CONFIG:
+            return False
 
-            self._config[key] = value
-            self.save()
-            return True
-        return False
+        default_type = type(self.DEFAULT_CONFIG[key])
+
+        # 类型转换
+        if default_type == bool and isinstance(value, str):
+            value = value.lower() in ('true', 'yes', '1', 'on')
+        elif default_type in (int, float, str):
+            try:
+                value = default_type(value)
+            except (ValueError, TypeError):
+                # 转换失败，返回错误
+                return False
+
+        self._config[key] = value
+        self.save()
+        return True
 
     def reset(self):
         """重置为默认配置"""

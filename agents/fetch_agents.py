@@ -14,6 +14,17 @@ from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
 
+# 预编译正则表达式（性能优化）
+CLEAN_PATTERN = re.compile(r'\n\s*\n\s*\n')
+LINK_PATTERN = re.compile(r'https?://[^\s\)\]\>\"\']+')
+
+# 登录检测关键字（使用 frozenset 优化查找性能）
+LOGIN_INDICATORS = frozenset([
+    "请登录", "登录后查看", "需要登录", "sign in to view",
+    "please log in", "login required", "authentication required"
+])
+
+
 @dataclass
 class FetchResult:
     """抓取结果"""
@@ -69,8 +80,8 @@ class BaseAgent:
 
     def _clean_content(self, text: str) -> str:
         """清理内容"""
-        # 移除多余空行
-        text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
+        # 使用预编译的正则移除多余空行
+        text = CLEAN_PATTERN.sub('\n\n', text)
         # 移除行首行尾空白
         text = '\n'.join(line.strip() for line in text.split('\n'))
         return text.strip()
@@ -151,8 +162,8 @@ class JinaAgent(BaseAgent):
             cleaned = self._clean_content(raw_content)
             title = self._extract_title(cleaned)
 
-            # 提取链接
-            links = re.findall(r'https?://[^\s\)\]\>\"\']+', raw_content)
+            # 提取链接（使用预编译正则）
+            links = LINK_PATTERN.findall(raw_content)
 
             return FetchResult(
                 success=True,
@@ -173,6 +184,7 @@ class JinaAgent(BaseAgent):
             )
 
         except urllib.error.HTTPError as e:
+            duration = (time.time() - start_time) * 1000
             return FetchResult(
                 success=False,
                 url=url,
@@ -180,9 +192,11 @@ class JinaAgent(BaseAgent):
                 tool=self.tool,
                 content={},
                 metadata={},
-                error=f"HTTP {e.code}: {e.reason}"
+                error=f"HTTP {e.code}: {e.reason}",
+                duration_ms=duration
             )
         except Exception as e:
+            duration = (time.time() - start_time) * 1000
             return FetchResult(
                 success=False,
                 url=url,
@@ -190,7 +204,8 @@ class JinaAgent(BaseAgent):
                 tool=self.tool,
                 content={},
                 metadata={},
-                error=str(e)
+                error=str(e),
+                duration_ms=duration
             )
 
     def _check_quality(self, content: str) -> Dict[str, Any]:
@@ -201,16 +216,13 @@ class JinaAgent(BaseAgent):
         if len(content) < 500:
             return {"ok": False, "error": f"内容太短 ({len(content)} 字符)"}
 
-        # 检查登录墙
-        login_indicators = [
-            "请登录", "登录后查看", "需要登录", "sign in to view",
-            "please log in", "login required", "authentication required"
-        ]
-
+        # 使用预定义的 frozenset 检查登录墙（性能优化）
         content_lower = content.lower()
-        for indicator in login_indicators:
-            if indicator in content_lower:
-                return {"ok": False, "error": f"检测到登录墙: {indicator}"}
+        if any(indicator in content_lower for indicator in LOGIN_INDICATORS):
+            # 找到匹配的指示器
+            for indicator in LOGIN_INDICATORS:
+                if indicator in content_lower:
+                    return {"ok": False, "error": f"检测到登录墙: {indicator}"}
 
         return {"ok": True}
 
